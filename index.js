@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
@@ -61,7 +62,7 @@ bot.onText(/hapus produk|Hapus Produk/i, (msg) => {
   bot.sendMessage(msg.chat.id, 'Pilih produk yang ingin dihapus:', options);
 });
 
-// Handle hapus produk tombol
+// Handle callback query
 bot.on('callback_query', (query) => {
   const data = query.data;
   const chatId = query.message.chat.id;
@@ -87,21 +88,54 @@ bot.on('callback_query', (query) => {
     bot.sendPhoto(chatId, qrisPath, {
       caption: `💳 Scan QRIS untuk membayar:\n\n📌 Produk: ${produk.nama}\n💰 Harga: Rp${produk.harga}`,
       reply_markup: {
-        inline_keyboard: [[{ text: '✅ Saya Sudah Bayar', callback_data: 'konfirmasi_' + index }]]
+        inline_keyboard: [[{ text: '✅ Saya Sudah Bayar', callback_data: 'konfirmasi_' + index + '_' + query.from.id }]]
       }
     });
   }
 
-  // Konfirmasi
+  // Konfirmasi: Kirim notifikasi ke admin untuk verifikasi
   if (data.startsWith('konfirmasi_')) {
-    const index = parseInt(data.split('_')[1]);
+    const [, indexStr, userIdStr] = data.split('_');
+    const index = parseInt(indexStr);
+    const userId = parseInt(userIdStr);
+    const produk = list[index];
+    if (!produk) return bot.sendMessage(chatId, '❌ Produk tidak ditemukan.');
+
+    const confirmText = `📥 User [${query.from.first_name}](tg://user?id=${userId}) mengklaim pembayaran:\n\n📦 Produk: ${produk.nama}\n💰 Harga: Rp${produk.harga}`;
+    bot.sendMessage(ADMIN_ID, confirmText, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Kirim Produk', callback_data: 'approve_' + index + '_' + userId },
+            { text: '❌ Tolak', callback_data: 'reject_' + userId }
+          ]
+        ]
+      }
+    });
+    bot.sendMessage(userId, '⏳ Menunggu verifikasi pembayaran dari admin...');
+  }
+
+  // Admin menyetujui kirim produk
+  if (data.startsWith('approve_')) {
+    const [, indexStr, userIdStr] = data.split('_');
+    const index = parseInt(indexStr);
+    const userId = parseInt(userIdStr);
     const produk = list[index];
     if (!produk || produk.stok.length === 0) {
-      return bot.sendMessage(chatId, '❌ Stok habis atau produk tidak ditemukan.');
+      return bot.sendMessage(ADMIN_ID, '❌ Stok habis atau produk tidak ditemukan.');
     }
     const kode = produk.stok.shift();
     saveProduk(list);
-    bot.sendMessage(chatId, `✅ Pembayaran diterima!\n\n🔑 Produk Anda:\n\n${kode}`);
+    bot.sendMessage(userId, `✅ Pembayaran diterima!\n\n🔑 Produk Anda:\n\n${kode}`);
+    bot.sendMessage(ADMIN_ID, '✅ Produk dikirim ke pembeli.');
+  }
+
+  // Admin menolak
+  if (data.startsWith('reject_')) {
+    const userId = parseInt(data.split('_')[1]);
+    bot.sendMessage(userId, '❌ Pembayaran ditolak oleh admin.');
+    bot.sendMessage(ADMIN_ID, '❌ Pembayaran ditolak.');
   }
 
   bot.answerCallbackQuery(query.id);
