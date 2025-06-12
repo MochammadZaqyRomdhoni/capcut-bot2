@@ -4,7 +4,7 @@ const TelegramBot = require('node-telegram-bot-api');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const ADMIN_ID = 7006736189;
-const produkList = [];
+let produkList = [];
 
 // /start
 bot.onText(/\/start/, (msg) => {
@@ -58,11 +58,43 @@ bot.onText(/\/stok/, (msg) => {
     return bot.sendMessage(msg.chat.id, '📦 Belum ada produk.');
   }
 
-  const daftar = produkList.map(p => {
-    return isAdmin
+  produkList.forEach((p, i) => {
+    const teks = isAdmin
       ? `📌 ${p.nama} - Rp${p.harga} - Stok: ${p.stok}`
       : `📌 ${p.nama} - Rp${p.harga}`;
-  }).join('\n');
 
-  bot.sendMessage(msg.chat.id, daftar);
+    bot.sendMessage(msg.chat.id, teks, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: `🛒 Beli ${p.nama}`, callback_data: `beli_${i}` }
+          ]
+        ]
+      }
+    });
+  });
+});
+
+// QRIS placeholder (simulasi)
+bot.on('callback_query', (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+
+  if (data.startsWith('beli_')) {
+    const index = parseInt(data.split('_')[1]);
+    const produk = produkList[index];
+
+    if (!produk) {
+      return bot.sendMessage(chatId, '❌ Produk tidak ditemukan.');
+    }
+
+    bot.sendPhoto(chatId, 'https://i.ibb.co/yfgYz5B/qris-contoh.jpg', {
+      caption: `💳 Silakan scan QRIS berikut untuk membeli:
+
+📌 Produk: ${produk.nama}
+💰 Harga: Rp${produk.harga}`,
+    });
+  }
+
+  bot.answerCallbackQuery(query.id);
 });
