@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "nama": "CapCut Pro",
+    "harga": 15000,
+    "stok": [
+      "capcutpro1@example.com|password1",
+      "capcutpro2@example.com|password2"
+    ]
+  },
+  {
+    "nama": "Netflix Premium",
+    "harga": 25000,
+    "stok": [
+      "netflix1@example.com|pass123",
+      "netflix2@example.com|pass456"
+    ]
+  }
+]
