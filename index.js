@@ -1,65 +1,72 @@
-require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-const adminId = process.env.ADMIN_ID;
+const TOKEN = '7487677709:AAE8IZDZV58U7EZVlEIH2RZfZexhEuPbnxY';
+const ADMIN_ID = '7006736189';
+const bot = new TelegramBot(TOKEN, { polling: true });
 
-let produk = [];
+const dbFile = 'produk.json';
+if (!fs.existsSync(dbFile)) fs.writeFileSync(dbFile, '[]');
 
-function simpanData() {
-  fs.writeFileSync('produk.json', JSON.stringify(produk, null, 2));
+function loadProduk() {
+  return JSON.parse(fs.readFileSync(dbFile));
 }
 
-function muatData() {
-  if (fs.existsSync('produk.json')) {
-    produk = JSON.parse(fs.readFileSync('produk.json'));
-  }
+function saveProduk(data) {
+  fs.writeFileSync(dbFile, JSON.stringify(data, null, 2));
 }
-muatData();
 
-bot.onText(/\/(start|menu)/, (msg) => {
-  if (msg.chat.id.toString() !== adminId) return;
-  bot.sendMessage(msg.chat.id, 'Selamat datang! Gunakan /tambahproduk, /stok, /editproduk, /hapusproduk.');
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, 'Selamat datang di bot admin produk.');
 });
 
 bot.onText(/\/tambahproduk (.+)/, (msg, match) => {
-  if (msg.chat.id.toString() !== adminId) return;
-  const [nama, harga, stok] = match[1].split('|').map(x => x.trim());
-  if (!nama || !harga || !stok) return bot.sendMessage(msg.chat.id, 'Format salah. Contoh:
-/tambahproduk Nama | Harga | Stok');
-  produk.push({ nama, harga, stok });
-  simpanData();
-  bot.sendMessage(msg.chat.id, `✅ Produk "${nama}" ditambahkan.`);
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  const [nama, harga, stok] = match[1].split('|');
+  if (!nama || !harga || !stok) {
+    return bot.sendMessage(msg.chat.id, `Format salah. Contoh:\n/tambahproduk nama|harga|stok`);
+  }
+  const data = loadProduk();
+  data.push({ nama, harga, stok });
+  saveProduk(data);
+  bot.sendMessage(msg.chat.id, 'Produk berhasil ditambahkan.');
 });
 
 bot.onText(/\/stok/, (msg) => {
-  if (msg.chat.id.toString() !== adminId) return;
-  if (produk.length === 0) return bot.sendMessage(msg.chat.id, 'Belum ada produk.');
-  const msgProduk = produk.map(p => `Nama: ${p.nama}
-Harga: ${p.harga}
-Stok: ${p.stok}`).join('\n\n');
-  bot.sendMessage(msg.chat.id, '*Stok Produk:*
-
-' + msgProduk, { parse_mode: 'Markdown' });
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  const data = loadProduk();
+  if (data.length === 0) {
+    return bot.sendMessage(msg.chat.id, 'Belum ada produk.');
+  }
+  const list = data.map((p, i) => (
+    `${i + 1}. ${p.nama}\nHarga: ${p.harga}\nStok: ${p.stok}`
+  )).join('\n\n');
+  bot.sendMessage(msg.chat.id, `Daftar Produk:\n\n${list}`);
 });
 
-bot.onText(/\/hapusproduk (.+)/, (msg, match) => {
-  if (msg.chat.id.toString() !== adminId) return;
-  const nama = match[1].trim();
-  const index = produk.findIndex(p => p.nama.toLowerCase() === nama.toLowerCase());
-  if (index === -1) return bot.sendMessage(msg.chat.id, `❌ Produk "${nama}" tidak ditemukan.`);
-  produk.splice(index, 1);
-  simpanData();
-  bot.sendMessage(msg.chat.id, `🗑️ Produk "${nama}" dihapus.`);
+bot.onText(/\/hapusproduk (\d+)/, (msg, match) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  const index = parseInt(match[1]) - 1;
+  const data = loadProduk();
+  if (index < 0 || index >= data.length) {
+    return bot.sendMessage(msg.chat.id, 'Index produk tidak valid.');
+  }
+  data.splice(index, 1);
+  saveProduk(data);
+  bot.sendMessage(msg.chat.id, 'Produk berhasil dihapus.');
 });
 
-bot.onText(/\/editproduk (.+)/, (msg, match) => {
-  if (msg.chat.id.toString() !== adminId) return;
-  const [namaLama, namaBaru, harga, stok] = match[1].split('|').map(x => x.trim());
-  const idx = produk.findIndex(p => p.nama.toLowerCase() === namaLama.toLowerCase());
-  if (idx === -1) return bot.sendMessage(msg.chat.id, '❌ Produk tidak ditemukan.');
-  produk[idx] = { nama: namaBaru, harga, stok };
-  simpanData();
-  bot.sendMessage(msg.chat.id, `✏️ Produk "${namaLama}" diupdate jadi "${namaBaru}".`);
+bot.onText(/\/editproduk (\d+)\|(.+)/, (msg, match) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  const index = parseInt(match[1]) - 1;
+  const [nama, harga, stok] = match[2].split('|');
+  const data = loadProduk();
+  if (index < 0 || index >= data.length || !nama || !harga || !stok) {
+    return bot.sendMessage(msg.chat.id, `Format salah. Contoh:\n/editproduk 1|namabaru|hargabaru|stokbaru`);
+  }
+  data[index] = { nama, harga, stok };
+  saveProduk(data);
+  bot.sendMessage(msg.chat.id, 'Produk berhasil diedit.');
 });
+
+console.log('Bot jalan di port 8080');
