@@ -1,70 +1,88 @@
-
+require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 
-require('dotenv').config();
-
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const ADMIN_ID = process.env.ADMIN_ID;
 
-const ADMIN_ID = process.env.ADMIN_ID || '7006736189'; // Telegram ID admin
+let produkList = [];
 
-let produk = [];
-
-// Load data produk dari file (jika ada)
-if (fs.existsSync('produk.json')) {
-  produk = JSON.parse(fs.readFileSync('produk.json'));
-}
-
-// Simpan data produk ke file
 function simpanProduk() {
-  fs.writeFileSync('produk.json', JSON.stringify(produk, null, 2));
+  fs.writeFileSync('produk.json', JSON.stringify(produkList, null, 2));
 }
 
-// Fungsi untuk memeriksa admin
-function isAdmin(id) {
-  return String(id) === String(ADMIN_ID);
+function muatProduk() {
+  try {
+    const data = fs.readFileSync('produk.json');
+    produkList = JSON.parse(data);
+  } catch (e) {
+    produkList = [];
+  }
 }
 
-// Command /start
+muatProduk();
+
+// Mulai
 bot.onText(/\/start/, (msg) => {
-  const opts = {
+  const chatId = msg.chat.id;
+  const isAdmin = String(chatId) === ADMIN_ID;
+
+  const buttons = [
+    [{ text: '📦 Lihat Produk', callback_data: 'lihat_produk' }]
+  ];
+
+  if (isAdmin) {
+    buttons.push([{ text: '➕ Tambah Produk', callback_data: 'tambah_produk' }]);
+  }
+
+  bot.sendMessage(chatId, 'Selamat datang! Pilih menu di bawah:', {
     reply_markup: {
-      inline_keyboard: [
-        [{ text: 'Lihat Produk', callback_data: 'lihat_produk' }],
-        ...(isAdmin(msg.from.id)
-          ? [[{ text: 'Tambah Produk', callback_data: 'tambah_produk' }]]
-          : [])
-      ]
+      inline_keyboard: buttons
     }
-  };
-  bot.sendMessage(msg.chat.id, `Selamat datang, ${msg.from.first_name}!`, opts);
+  });
 });
 
-// Handler button callback
+// Aksi ketika klik tombol
 bot.on('callback_query', (query) => {
   const chatId = query.message.chat.id;
-  const userId = query.from.id;
+  const data = query.data;
+  const isAdmin = String(chatId) === ADMIN_ID;
 
-  if (query.data === 'lihat_produk') {
-    if (produk.length === 0) {
+  if (data === 'lihat_produk') {
+    if (produkList.length === 0) {
       return bot.sendMessage(chatId, 'Belum ada produk.');
     }
-    const teks = produk.map((p, i) => `${i + 1}. ${p.nama} - Rp${p.harga} (Stok: ${p.stok})`).join('\n');
-    bot.sendMessage(chatId, teks);
+
+    let teks = '📦 Daftar Produk:
+
+';
+    produkList.forEach((p, i) => {
+      teks += `${i + 1}. ${p.nama} - Rp${p.harga} (${p.stok} stok)
+`;
+    });
+
+    return bot.sendMessage(chatId, teks);
   }
 
-  if (query.data === 'tambah_produk') {
-    if (!isAdmin(userId)) return bot.sendMessage(chatId, 'Akses ditolak.');
-    bot.sendMessage(chatId, 'Kirim produk dengan format:
-nama|harga|stok');
+  if (data === 'tambah_produk') {
+    if (!isAdmin) return bot.sendMessage(chatId, '❌ Anda tidak punya akses.');
+
+    bot.sendMessage(chatId, `Kirim produk dengan format:
+Nama | Harga | Stok
+Contoh:
+Produk A | 10000 | 5`);
+
     bot.once('message', (msg) => {
-      const [nama, harga, stok] = msg.text.split('|');
-      if (!nama || !harga || !stok) return bot.sendMessage(chatId, 'Format salah.');
-      produk.push({ nama, harga, stok: parseInt(stok) });
+      const text = msg.text;
+      const [nama, harga, stok] = text.split('|').map(t => t.trim());
+
+      if (!nama || !harga || !stok) {
+        return bot.sendMessage(chatId, '❌ Format salah. Coba lagi.');
+      }
+
+      produkList.push({ nama, harga, stok });
       simpanProduk();
-      bot.sendMessage(chatId, `Produk ${nama} ditambahkan.`);
+      bot.sendMessage(chatId, '✅ Produk berhasil ditambahkan.');
     });
   }
-
-  bot.answerCallbackQuery(query.id);
 });
