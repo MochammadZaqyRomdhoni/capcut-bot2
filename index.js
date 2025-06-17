@@ -1,131 +1,200 @@
+
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
-const ADMIN_ID = 7006736189;
+const ADMIN_ID = process.env.ADMIN_ID;
 
-// Load & Simpan Produk
-function loadProduk() {
-  try {
-    return JSON.parse(fs.readFileSync('produk.json'));
-  } catch {
-    return [];
-  }
-}
+let list = [
+  { nama: "CapCut Pro", harga: 15000, stok: ["Kode-CAP1", "Kode-CAP2"], gambar: "capcut.jpg" },
+  { nama: "Netflix Premium", harga: 25000, stok: ["Akun-NET1", "Akun-NET2"], gambar: "netflix.jpg" }
+];
 
-function saveProduk(list) {
-  fs.writeFileSync('produk.json', JSON.stringify(list, null, 2));
-}
+const userSteps = {};
+const pendingPayments = {}; // simpan pembayaran menunggu konfirmasi admin
 
-// Start
 bot.onText(/\/start/, (msg) => {
-  const isAdmin = msg.from.id === ADMIN_ID;
-  bot.sendMessage(msg.chat.id, `Selamat datang ${isAdmin ? 'Admin' : 'User'}!`, {
-    reply_markup: {
-      keyboard: isAdmin
-        ? [['Tambah Produk', 'Hapus Produk'], ['Stok']]
-        : [['Produk']],
-      resize_keyboard: true,
-    },
-  });
-});
-
-// Tambah Produk
-bot.onText(/tambah produk|Tambah Produk/i, (msg) => {
-  if (msg.from.id !== ADMIN_ID) return;
-  bot.sendMessage(msg.chat.id, 'Ketik dengan format:\nNama,Harga,KODE1,KODE2,...');
-  bot.once('message', (m) => {
-    const [nama, harga, ...stok] = m.text.split(',');
-    if (!nama || !harga || stok.length === 0) {
-      return bot.sendMessage(m.chat.id, 'Format salah. Contoh:\nNetflix,25000,KODE1,KODE2');
-    }
-    const list = loadProduk();
-    list.push({ nama: nama.trim(), harga: parseInt(harga), stok: stok.map(s => s.trim()) });
-    saveProduk(list);
-    bot.sendMessage(m.chat.id, `✅ Produk "${nama}" ditambahkan (${stok.length} stok).`);
-  });
-});
-
-// Hapus Produk
-bot.onText(/hapus produk|Hapus Produk/i, (msg) => {
-  if (msg.from.id !== ADMIN_ID) return;
-  const list = loadProduk();
-  if (list.length === 0) return bot.sendMessage(msg.chat.id, '📦 Belum ada produk.');
-  const options = {
-    reply_markup: {
-      inline_keyboard: list.map((p, i) => [{ text: p.nama, callback_data: 'hapus_' + i }])
-    }
+  const chatId = msg.chat.id;
+  const text = `Selamat datang ${msg.from.first_name || 'User'}!`;
+  const keyboard = {
+    keyboard: [['Produk'], ...(chatId.toString() === ADMIN_ID ? [['/admin']] : [])],
+    resize_keyboard: true
   };
-  bot.sendMessage(msg.chat.id, 'Pilih produk yang ingin dihapus:', options);
+  bot.sendMessage(chatId, text, { reply_markup: keyboard });
 });
 
-// Handle hapus produk tombol
-bot.on('callback_query', (query) => {
+bot.onText(/Produk/, (msg) => {
+  const chatId = msg.chat.id;
+  let teks = '📦 *LIST PRODUK*\n--------------------------\n';
+  list.forEach((item, i) => {
+    teks += `[${i + 1}] ${item.nama.toUpperCase()} - Rp${item.harga}\n`;
+  });
+  const tombol = [];
+  for (let i = 0; i < list.length; i += 6) {
+    tombol.push(list.slice(i, i + 6).map((_, j) => {
+      return { text: (i + j + 1).toString(), callback_data: `beli_${i + j}` };
+    }));
+  }
+  bot.sendMessage(chatId, teks, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: tombol }
+  });
+});
+
+bot.onText(/\/admin/, (msg) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '➕ Tambah Produk', callback_data: 'admin_tambah_produk' }],
+      [{ text: '📦 Lihat Semua Produk', callback_data: 'admin_lihat_produk' }]
+    ]
+  };
+  bot.sendMessage(msg.chat.id, '🔧 *Menu Admin*', {
+    parse_mode: 'Markdown',
+    reply_markup: keyboard
+  });
+});
+
+bot.on('callback_query', async (query) => {
   const data = query.data;
   const chatId = query.message.chat.id;
-  const list = loadProduk();
 
-  if (data.startsWith('hapus_')) {
-    const index = parseInt(data.split('_')[1]);
-    const hapus = list.splice(index, 1);
-    saveProduk(list);
-    return bot.editMessageText(`🗑️ Produk "${hapus[0].nama}" dihapus.`, {
-      chat_id: chatId,
-      message_id: query.message.message_id,
-    });
-  }
-
-  // Beli
   if (data.startsWith('beli_')) {
     const index = parseInt(data.split('_')[1]);
     const produk = list[index];
-    if (!produk) return bot.sendMessage(chatId, '❌ Produk tidak ditemukan.');
-
-    const qrisPath = path.resolve(__dirname, 'images (2).png');
-    bot.sendPhoto(chatId, qrisPath, {
-      caption: `💳 Scan QRIS untuk membayar:\n\n📌 Produk: ${produk.nama}\n💰 Harga: Rp${produk.harga}`,
+    if (!produk) return;
+    const imgPath = path.join(__dirname, 'images', produk.gambar);
+    bot.sendPhoto(chatId, imgPath, {
+      caption: `📌 *Produk:* ${produk.nama}\n💰 *Harga:* Rp${produk.harga}\n\nBerapa jumlah yang ingin Anda beli?`,
+      parse_mode: 'Markdown',
       reply_markup: {
-        inline_keyboard: [[{ text: '✅ Saya Sudah Bayar', callback_data: 'konfirmasi_' + index }]]
+        inline_keyboard: [
+          [
+            { text: '1', callback_data: `jumlah_${index}_1` },
+            { text: '2', callback_data: `jumlah_${index}_2` },
+            { text: '3', callback_data: `jumlah_${index}_3` }
+          ]
+        ]
       }
     });
   }
 
-  // Konfirmasi
-  if (data.startsWith('konfirmasi_')) {
-    const index = parseInt(data.split('_')[1]);
+  if (data.startsWith('jumlah_')) {
+    const [, indexStr, qtyStr] = data.split('_');
+    const index = parseInt(indexStr);
+    const qty = parseInt(qtyStr);
     const produk = list[index];
-    if (!produk || produk.stok.length === 0) {
-      return bot.sendMessage(chatId, '❌ Stok habis atau produk tidak ditemukan.');
-    }
-    const kode = produk.stok.shift();
-    saveProduk(list);
-    bot.sendMessage(chatId, `✅ Pembayaran diterima!\n\n🔑 Produk Anda:\n\n${kode}`);
+    const total = produk.harga * qty;
+    const qrisPath = path.join(__dirname, 'images', 'qris.png');
+    pendingPayments[chatId] = { index, qty };
+    bot.sendPhoto(chatId, qrisPath, {
+      caption: `💳 Scan QRIS untuk membayar *Rp${total}* untuk *${qty}x ${produk.nama}*`,
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '✅ Saya Sudah Bayar', callback_data: `konfirmasi_admin_${chatId}` }]
+        ]
+      }
+    });
   }
 
-  bot.answerCallbackQuery(query.id);
+  if (data.startsWith('konfirmasi_admin_')) {
+    const buyerId = parseInt(data.split('_')[2]);
+    const pending = pendingPayments[buyerId];
+    if (!pending) return bot.sendMessage(chatId, '❌ Tidak ada pembayaran yang perlu dikonfirmasi.');
+    const produk = list[pending.index];
+    bot.sendMessage(ADMIN_ID, `🧾 Konfirmasi pembayaran:
+
+👤 User ID: ${buyerId}
+📦 Produk: ${produk.nama}
+💳 Jumlah: ${pending.qty}
+
+Konfirmasi?`, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '✅ Konfirmasi', callback_data: `admin_ok_${buyerId}` }],
+          [{ text: '❌ Tolak', callback_data: `admin_tolak_${buyerId}` }]
+        ]
+      }
+    });
+    bot.sendMessage(buyerId, '🕒 Menunggu konfirmasi admin...');
+  }
+
+  if (data.startsWith('admin_ok_')) {
+    const buyerId = parseInt(data.split('_')[2]);
+    const pending = pendingPayments[buyerId];
+    if (!pending) return;
+    const produk = list[pending.index];
+    if (produk.stok.length >= pending.qty) {
+      const kirim = produk.stok.splice(0, pending.qty).join('\n');
+      bot.sendMessage(buyerId, `✅ Berikut produk Anda:\n\n${kirim}`);
+    } else {
+      bot.sendMessage(buyerId, '❌ Stok tidak cukup.');
+    }
+    delete pendingPayments[buyerId];
+  }
+
+  if (data.startsWith('admin_tolak_')) {
+    const buyerId = parseInt(data.split('_')[2]);
+    bot.sendMessage(buyerId, '❌ Pembayaran Anda ditolak oleh admin.');
+    delete pendingPayments[buyerId];
+  }
+
+  if (data === 'admin_tambah_produk') {
+    userSteps[chatId] = { step: 1, temp: {} };
+    bot.sendMessage(chatId, '📝 Masukkan nama produk:');
+  }
+
+  if (data === 'admin_lihat_produk') {
+    let teks = '📦 *Semua Produk:*
+
+';
+    list.forEach((p, i) => {
+      teks += `${i + 1}. ${p.nama} - Rp${p.harga} (Stok: ${p.stok.length})\n`;
+    });
+    bot.sendMessage(chatId, teks, { parse_mode: 'Markdown' });
+  }
 });
 
-// Lihat Stok
-bot.onText(/Stok/i, (msg) => {
-  const list = loadProduk();
-  if (list.length === 0) return bot.sendMessage(msg.chat.id, '📦 Belum ada produk.');
-  let teks = '📦 Stok Produk:\n\n';
-  list.forEach((p, i) => {
-    teks += `[${i + 1}] ${p.nama} - Rp${p.harga} (Stok: ${p.stok.length})\n`;
-  });
-  bot.sendMessage(msg.chat.id, teks);
-});
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  if (msg.photo && userSteps[chatId]?.step === 4) {
+    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    const fileLink = await bot.getFileLink(fileId);
+    const namaGambar = `produk_${Date.now()}.jpg`;
+    const filepath = path.join(__dirname, 'images', namaGambar);
+    const writer = fs.createWriteStream(filepath);
+    const response = await axios({ url: fileLink.href, method: 'GET', responseType: 'stream' });
+    response.data.pipe(writer);
+    writer.on('finish', () => {
+      const data = userSteps[chatId].temp;
+      data.gambar = namaGambar;
+      list.push(data);
+      bot.sendMessage(chatId, '✅ Produk berhasil ditambahkan!');
+      delete userSteps[chatId];
+    });
+    return;
+  }
 
-// Tampilkan Produk
-bot.onText(/Produk/i, (msg) => {
-  const list = loadProduk();
-  if (list.length === 0) return bot.sendMessage(msg.chat.id, '📦 Belum ada produk.');
-  const buttons = list.map((p, i) => [{ text: `${p.nama} - Rp${p.harga}`, callback_data: 'beli_' + i }]);
-  bot.sendMessage(msg.chat.id, '🛒 Pilih produk yang ingin dibeli:', {
-    reply_markup: { inline_keyboard: buttons }
-  });
-});
+  if (!userSteps[chatId]) return;
 
-console.log('🤖 Bot aktif!'); ini index yang tadi tambahkan aja agar ada fitur itunya
+  const stepData = userSteps[chatId];
+  if (stepData.step === 1) {
+    stepData.temp.nama = msg.text;
+    stepData.step = 2;
+    return bot.sendMessage(chatId, '💰 Masukkan harga produk:');
+  }
+  if (stepData.step === 2) {
+    stepData.temp.harga = parseInt(msg.text);
+    stepData.step = 3;
+    return bot.sendMessage(chatId, '📦 Masukkan stok produk (pisahkan dengan koma):');
+  }
+  if (stepData.step === 3) {
+    stepData.temp.stok = msg.text.split(',').map(s => s.trim());
+    stepData.step = 4;
+    return bot.sendMessage(chatId, '🖼 Kirim foto produk:');
+  }
+});
