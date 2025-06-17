@@ -1,102 +1,115 @@
+
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
+const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
-const ADMIN_ID = process.env.ADMIN_ID;
-
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const ADMIN_ID = 7006736189;
 let produkList = [];
-const loadProduk = () => {
+
+function loadProduk() {
   try {
-    const data = fs.readFileSync('produk.json');
-    produkList = JSON.parse(data);
-  } catch (err) {
-    produkList = [];
+    return JSON.parse(fs.readFileSync('produk.json'));
+  } catch {
+    return [];
   }
-};
+}
 
-const saveProduk = () => {
-  fs.writeFileSync('produk.json', JSON.stringify(produkList, null, 2));
-};
+function saveProduk(list) {
+  fs.writeFileSync('produk.json', JSON.stringify(list, null, 2));
+}
 
-bot.start((ctx) => {
-  const name = ctx.from.first_name;
-  let teks = `👋 Hai *${name}*!
-
-Selamat datang di *Toko Digital Kami*!
-Silakan pilih produk dengan klik tombol di bawah.`;
-  const buttons = [Markup.button.callback('📦 Lihat Produk', 'lihat_produk')];
-  if (ctx.from.id.toString() === ADMIN_ID) {
-    buttons.push(Markup.button.callback('📢 Broadcast', 'broadcast'));
-    buttons.push(Markup.button.callback('➕ Tambah Produk', 'tambah_produk'));
-    buttons.push(Markup.button.callback('🗑️ Hapus Produk', 'hapus_produk'));
-  }
-  ctx.reply(teks, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons, { columns: 1 }) });
-});
-
-bot.action('lihat_produk', (ctx) => {
-  loadProduk();
-  if (produkList.length === 0) {
-    return ctx.reply('Belum ada produk tersedia.');
-  }
-  let teks = `📦 *Daftar Produk:*
-
-`;
-  produkList.forEach((p, i) => {
-    teks += `*${i + 1}. ${p.nama}* - Rp${p.harga}
-`;
+bot.onText(/\/start/, (msg) => {
+  const isAdmin = msg.from.id === ADMIN_ID;
+  bot.sendMessage(msg.chat.id, `Selamat datang ${isAdmin ? 'Admin' : 'User'}!`, {
+    reply_markup: {
+      keyboard: isAdmin
+        ? [['/tambahproduk', '/hapusproduk'], ['/stok']]
+        : [['/produk']],
+      resize_keyboard: true,
+    },
   });
-  ctx.reply(teks, { parse_mode: 'Markdown' });
 });
 
-bot.action('broadcast', async (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return;
-  ctx.reply('Ketik pesan yang ingin dibroadcast:');
-  bot.once('text', async (ctx2) => {
-    const message = ctx2.message.text;
-    const users = [ctx2.from.id]; // Dummy data, seharusnya dari database user
-    users.forEach(id => {
-      bot.telegram.sendMessage(id, `📢 Broadcast:
+bot.onText(/\/admin/, (msg) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  bot.sendMessage(msg.chat.id, '✅ Panel admin dibuka.');
+});
 
-${message}`);
+bot.onText(/\/tambahproduk (.+)/, (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  const [nama, harga, ...stok] = match[1].split(',');
+  if (!nama || !harga || stok.length === 0) {
+    return bot.sendMessage(msg.chat.id, 'Format salah. Contoh:\n/tambahproduk Buku,10000,KODE1,KODE2');
+  }
+  const list = loadProduk();
+  list.push({ nama: nama.trim(), harga: parseInt(harga), stok: stok.map(s => s.trim()) });
+  saveProduk(list);
+  bot.sendMessage(msg.chat.id, `✅ Produk "${nama}" ditambahkan dengan ${stok.length} stok.`);
+});
+
+bot.onText(/\/hapusproduk (.+)/, (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  const nama = match[1].trim();
+  const list = loadProduk();
+  const index = list.findIndex(p => p.nama === nama);
+  if (index === -1) return bot.sendMessage(msg.chat.id, '❌ Produk tidak ditemukan.');
+  list.splice(index, 1);
+  saveProduk(list);
+  bot.sendMessage(msg.chat.id, `🗑️ Produk "${nama}" dihapus.`);
+});
+
+bot.onText(/\/stok/, (msg) => {
+  const list = loadProduk();
+  if (list.length === 0) return bot.sendMessage(msg.chat.id, '📦 Belum ada produk.');
+  let teks = '📦 Stok Produk:\n\n';
+  list.forEach((p, i) => {
+    teks += `[${i + 1}] ${p.nama} - Rp${p.harga} (Stok: ${p.stok.length})\n`;
+  });
+  bot.sendMessage(msg.chat.id, teks);
+});
+
+bot.onText(/\/produk/, (msg) => {
+  const list = loadProduk();
+  if (list.length === 0) return bot.sendMessage(msg.chat.id, '📦 Belum ada produk.');
+  let teks = '🛒 Pilih produk yang ingin dibeli:\n\n';
+  const buttons = list.map((p, i) => [{ text: `${p.nama} - Rp${p.harga}`, callback_data: 'beli_' + i }]);
+  bot.sendMessage(msg.chat.id, teks, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+});
+
+bot.on('callback_query', (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+
+  if (data.startsWith('beli_')) {
+    const index = parseInt(data.split('_')[1]);
+    const list = loadProduk();
+    const produk = list[index];
+    if (!produk) return bot.sendMessage(chatId, '❌ Produk tidak ditemukan.');
+
+    bot.sendPhoto(chatId, 'https://i.ibb.co/yfgYz5B/qris-contoh.jpg', {
+      caption: `💳 Scan QRIS untuk membayar:\n\n📌 Produk: ${produk.nama}\n💰 Harga: Rp${produk.harga}`,
+      reply_markup: {
+        inline_keyboard: [[{ text: '✅ Saya Sudah Bayar', callback_data: 'konfirmasi_' + index }]]
+      }
     });
-    ctx2.reply('Broadcast dikirim ke semua user.');
-  });
+  }
+
+  if (data.startsWith('konfirmasi_')) {
+    const index = parseInt(data.split('_')[1]);
+    const list = loadProduk();
+    const produk = list[index];
+    if (!produk || produk.stok.length === 0) {
+      return bot.sendMessage(chatId, '❌ Stok kosong atau produk tidak ditemukan.');
+    }
+    const kode = produk.stok.shift();
+    saveProduk(list);
+    bot.sendMessage(chatId, `✅ Pembayaran diterima! Berikut produk Anda:\n\n🔑 ${kode}`);
+  }
+
+  bot.answerCallbackQuery(query.id);
 });
 
-bot.action('tambah_produk', async (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return;
-  ctx.reply('Ketik nama produk:');
-  bot.once('text', (ctx2) => {
-    const nama = ctx2.message.text;
-    ctx2.reply('Ketik harga produk (angka):');
-    bot.once('text', (ctx3) => {
-      const harga = parseInt(ctx3.message.text);
-      if (isNaN(harga)) return ctx3.reply('Harga tidak valid.');
-      loadProduk();
-      produkList.push({ nama, harga });
-      saveProduk();
-      ctx3.reply(`Produk *${nama}* berhasil ditambahkan.`, { parse_mode: 'Markdown' });
-    });
-  });
-});
-
-bot.action('hapus_produk', async (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return;
-  loadProduk();
-  if (produkList.length === 0) return ctx.reply('Tidak ada produk.');
-  let teks = 'Pilih produk yang ingin dihapus:';
-  const buttons = produkList.map((p, i) => Markup.button.callback(p.nama, `hapus_${i}`));
-  ctx.reply(teks, Markup.inlineKeyboard(buttons, { columns: 1 }));
-});
-
-bot.action(/hapus_(\d+)/, (ctx) => {
-  if (ctx.from.id.toString() !== ADMIN_ID) return;
-  const index = parseInt(ctx.match[1]);
-  loadProduk();
-  const removed = produkList.splice(index, 1);
-  saveProduk();
-  ctx.reply(`Produk *${removed[0].nama}* berhasil dihapus.`, { parse_mode: 'Markdown' });
-});
-
-bot.launch();
+console.log("🤖 Bot aktif!");
